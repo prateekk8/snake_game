@@ -18,7 +18,6 @@ from kivy.graphics import Color, Rectangle, Ellipse
 from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.properties import NumericProperty, ListProperty, BooleanProperty
-from kivy.uix.screenmanager import ScreenManager, Screen, FadeTransition
 
 GRID_SIZE = 20          # kept for backward reference; actual cols/rows are computed from CELL_PX
 CELL_PX = 20             # fixed pixel size of each grid cell - grid now fills the whole board
@@ -34,7 +33,6 @@ class GameBoard(Widget):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._tick = None
         self.cell_size = CELL_PX
         self.cols = 1
         self.rows = 1
@@ -83,10 +81,9 @@ class GameBoard(Widget):
         self.direction = self.next_direction
         head_x, head_y = self.snake[0]
         dx, dy = self.direction
-        new_head = (head_x + dx, head_y + dy)
-
-        # Wall collision
+        # Wrap around the edges instead of dying on wall contact
         new_head = ((head_x + dx) % self.cols, (head_y + dy) % self.rows)
+
         # Self collision
         if new_head in self.snake:
             self.end_game()
@@ -235,86 +232,16 @@ class DPad(GridLayout):
                   blank_bl, self.down_btn, blank_br):
             self.add_widget(w)
 
-class MenuButton(Button):
-    """Big flat button used on the menu screens."""
-
-    def __init__(self, **kwargs):
-        defaults = dict(
-            font_size=24,
-            background_normal='',
-            background_down='',
-            background_disabled_normal='',
-            background_color=(0.20, 0.22, 0.26, 1),
-            color=(0.95, 0.95, 0.95, 1),
-            disabled_color=(1, 1, 1, 0.3),
-            size_hint=(1, None),
-            height=64,
-        )
-        defaults.update(kwargs)
-        super().__init__(**defaults)
-
-
-class MenuScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        with self.canvas.before:
-            Color(0.09, 0.09, 0.11, 1)
-            self._bg = Rectangle(pos=self.pos, size=self.size)
-        self.bind(pos=self._sync_bg, size=self._sync_bg)
-
-        layout = BoxLayout(orientation='vertical', padding=40, spacing=14)
-        layout.add_widget(Label(
-            text="SNAKE", font_size=64, bold=True,
-            color=(0.45, 0.95, 0.55, 1), size_hint=(1, 0.3),
-        ))
-        layout.add_widget(MenuButton(
-            text="Start Game",
-            background_color=(0.30, 0.85, 0.40, 1),
-            color=(0.05, 0.05, 0.05, 1),
-            on_press=self.start_game,
-        ))
-        # Placeholders for later - enable each one when its screen exists
-        layout.add_widget(MenuButton(text="High Score", disabled=True))
-        layout.add_widget(MenuButton(text="Levels", disabled=True))
-        layout.add_widget(MenuButton(text="Modes", disabled=True))
-        layout.add_widget(Widget())   # spacer pushes everything up
-        self.add_widget(layout)
-
-    def _sync_bg(self, *args):
-        self._bg.pos = self.pos
-        self._bg.size = self.size
-
-    def start_game(self, *args):
-        self.manager.current = 'game'
-
-
-class GameScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.layout = RootLayout()
-        self.add_widget(self.layout)
-
-    def on_enter(self, *args):
-        self.layout.start()     # fresh game each time you arrive
-
-    def on_leave(self, *args):
-        self.layout.stop()      # pause the loop while on the menu
-
 
 class RootLayout(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(orientation='vertical', **kwargs)
 
-        top_bar = BoxLayout(size_hint=(1, 0.08), padding=(10, 0), spacing=6)
+        top_bar = BoxLayout(size_hint=(1, 0.08), padding=(10, 0))
         self.score_label = Label(text="Score: 0", font_size=20)
         top_bar.add_widget(self.score_label)
-        self.menu_btn = Button(
-            text="Menu", size_hint=(0.25, 1),
-            on_press=lambda *_: App.get_running_app().go_menu(),
-        )
-        top_bar.add_widget(self.menu_btn)
         self.restart_btn = Button(
-            text="Restart", size_hint=(0.3, 1),
+            text="Restart", size_hint=(0.35, 1),
             on_press=lambda *_: self.board.reset_game(),
         )
         top_bar.add_widget(self.restart_btn)
@@ -335,16 +262,7 @@ class RootLayout(BoxLayout):
         dpad_wrapper.add_widget(self.dpad)
         self.add_widget(dpad_wrapper)
 
-        def start(self):
-            self.board.reset_game()
-            self.stop()
-            self._tick = Clock.schedule_interval(self.board.update, MOVE_INTERVAL)
-
-        def stop(self):
-            if self._tick:
-                self._tick.cancel()
-                self._tick = None
-
+        Clock.schedule_interval(self.board.update, MOVE_INTERVAL)
 
         Window.bind(on_key_down=self._on_window_key_down)
 
@@ -360,29 +278,13 @@ class RootLayout(BoxLayout):
 
     def _on_game_over(self, instance, value):
         if value:
-            self.score_label.text = f"Game Over! Score: {self.board.score}"
-        else:
-            self.score_label.text = f"Score: {self.board.score}"
+            self.score_label.text = f"Game Over! Score: {self.board.score} - tap Restart"
 
 
 class SnakeApp(App):
     def build(self):
         self.title = "Snake"
-        self.sm = ScreenManager(transition=FadeTransition(duration=0.2))
-        self.sm.add_widget(MenuScreen(name='menu'))
-        self.sm.add_widget(GameScreen(name='game'))
-        Window.bind(on_keyboard=self._on_back)
-        return self.sm
-
-    def go_menu(self):
-        self.sm.current = 'menu'
-
-    def _on_back(self, window, key, *args):
-        # Android back button / Esc: leave the game for the menu
-        if key == 27 and self.sm.current == 'game':
-            self.go_menu()
-            return True
-        return False    # on the menu, let the OS handle it as normal
+        return RootLayout()
 
 
 if __name__ == "__main__":
