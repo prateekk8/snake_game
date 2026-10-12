@@ -280,11 +280,25 @@ class RootLayout(BoxLayout):
         if value:
             self.score_label.text = f"Game Over! Score: {self.board.score} - tap Restart"
 
+class MenuLayout(BoxLayout):
+    def __init__(self, on_start, **kwargs):
+        super().__init__(orientation='vertical', padding=40, spacing=20, **kwargs)
+        self.add_widget(Label(text="SNAKE", font_size=64))
+        self.add_widget(Button(
+            text="Start New Game", font_size=24, size_hint=(1, 0.2),
+            on_press=lambda *_: on_start(),
+        ))
 
 class SnakeApp(App):
     def build(self):
         self.title = "Snake"
-        return RootLayout()
+        self.container = BoxLayout()
+        self.container.add_widget(MenuLayout(on_start=self.start_game))
+        return self.container
+
+    def start_game(self):
+        self.container.clear_widgets()
+        self.container.add_widget(RootLayout())
 
 
 if __name__ == "__main__":
