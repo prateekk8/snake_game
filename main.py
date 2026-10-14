@@ -25,7 +25,11 @@ MOVE_INTERVAL = 0.15    # seconds between snake moves (lower = faster)
 GRID_COLOR = (0.20, 0.45, 0.95, 0.35)   # blue - most popular favourite colour worldwide, higher opacity
 
 UP, DOWN, LEFT, RIGHT = (0, 1), (0, -1), (-1, 0), (1, 0)
-
+BONUS_POINTS = 10
+BONUS_MIN_WAIT = 30      # fewest ticks before a bonus appears (~4.5 s)
+BONUS_MAX_WAIT = 80      # most ticks before a bonus appears (~12 s)
+BONUS_LIFETIME = 50      # ticks a bonus stays before vanishing (~7.5 s)
+BONUS_COLOR = (1.0, 0.85, 0.20, 1)   # gold
 
 class GameBoard(Widget):
     score = NumericProperty(0)
@@ -58,6 +62,7 @@ class GameBoard(Widget):
         self.next_direction = RIGHT
         self.score = 0
         self.game_over = False
+        self._reset_bonus()
         self.spawn_food()
         self.redraw()
 
@@ -67,6 +72,18 @@ class GameBoard(Widget):
             if pos not in self.snake:
                 self.food = pos
                 return
+
+    def _reset_bonus(self):
+        self.bonus = None
+        self.bonus_ttl = 0
+        self.bonus_timer = random.randint(BONUS_MIN_WAIT, BONUS_MAX_WAIT)
+
+    def spawn_bonus(self):
+        free = [(x, y) for x in range(self.cols) for y in range(self.rows)
+                if (x, y) not in self.snake and (x, y) != self.food]
+        if free:
+            self.bonus = random.choice(free)
+            self.bonus_ttl = BONUS_LIFETIME
 
     def set_direction(self, new_dir):
         # Prevent the snake from reversing directly into itself
@@ -96,6 +113,20 @@ class GameBoard(Widget):
             self.spawn_food()
         else:
             self.snake.pop()
+
+        # Bonus item: eat it for points, or it vanishes after a while
+        if self.bonus is not None:
+            if new_head == self.bonus:
+                self.score += BONUS_POINTS
+                self._reset_bonus()
+            else:
+                self.bonus_ttl -= 1
+                if self.bonus_ttl <= 0:
+                    self._reset_bonus()
+        else:
+            self.bonus_timer -= 1
+            if self.bonus_timer <= 0:
+                self.spawn_bonus()
 
         self.redraw()
 
@@ -130,6 +161,15 @@ class GameBoard(Widget):
                 pos=(self.x + fx * self.cell_size, self.y + fy * self.cell_size),
                 size=(self.cell_size, self.cell_size),
             )
+
+            # Bonus item (gold circle), blinks when about to disappear
+            if self.bonus and not (self.bonus_ttl <= 15 and self.bonus_ttl % 4 < 2):
+                bx, by = self.bonus
+                Color(*BONUS_COLOR)
+                Ellipse(
+                    pos=(self.x + bx * self.cell_size, self.y + by * self.cell_size),
+                    size=(self.cell_size, self.cell_size),
+                )
 
             # Snake body (everything except the head)
             Color(0.30, 0.85, 0.40, 1)

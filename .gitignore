@@ -180,6 +180,9 @@ dmypy.json
 # pytype static type analyzer
 .pytype/
 
+.buildozer/
+bin/
+
 # Cython debug symbols
 cython_debug/
 
