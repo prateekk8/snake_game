@@ -10,7 +10,7 @@ Phone:   on-screen D-pad.
 
 import os
 import random
-
+import json
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
@@ -53,6 +53,48 @@ GAME_TYPES = {
 
 UP, DOWN, LEFT, RIGHT = (0, 1), (0, -1), (-1, 0), (1, 0)
 
+class HighScores:
+    """Best score for each game type, saved in a small JSON file."""
+
+    def __init__(self, path=None):
+        self.path = path
+        self.best = {name: 0 for name in GAME_TYPES}
+        self._load()
+
+    def _load(self):
+        if not self.path:
+            return
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+            for name in self.best:
+                self.best[name] = int(data.get(name, 0))
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass                          # no file yet, or unreadable: start at zero
+
+    def get(self, game_type):
+        return self.best.get(game_type, 0)
+
+    def submit(self, game_type, score):
+        """Record a score. Returns True if it is a new high score."""
+        if score > self.get(game_type):
+            self.best[game_type] = score
+            self._save()
+            return True
+        return False
+
+    def _save(self):
+        if not self.path:
+            return
+        try:
+            folder = os.path.dirname(self.path)
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+            with open(self.path, "w") as f:
+                json.dump(self.best, f)
+        except OSError:
+            pass
+
 
 # ------------------------------------------------------------------- walls
 def make_walls(kind, cols, rows):
@@ -75,7 +117,7 @@ def make_walls(kind, cols, rows):
         arm_x = max(2, round(cols * 0.15))
         arm_y = max(2, round(rows * 0.15))
         corners = ((0, 0, 1, 1), (cols - 1, 0, -1, 1),
-                   (0, rows - 1, 1, -1), (cols - 1, rows - 1, -1, -1))
+                   (0, rows, 1, -1), (cols - 1, rows, -1, -1))
         for cx, cy, sx, sy in corners:
             for i in range(arm_x):
                 walls.add((cx + sx * i, cy))
@@ -303,13 +345,16 @@ class DPad(GridLayout):
 class RootLayout(BoxLayout):
     """The game: info bar, score bar, board and D-pad."""
 
-    def __init__(self, game_type, on_menu, **kwargs):
+    def __init__(self, game_type, on_menu, scores, **kwargs):
         super().__init__(orientation='vertical', **kwargs)
         self._tick = None
+        self.game_type = game_type
+        self.scores = scores
 
         info_bar = BoxLayout(size_hint=(1, 0.05), padding=(10, 0))
         info_bar.add_widget(Label(text=f"Type: {game_type}", font_size=16))
-        info_bar.add_widget(Label(text="High Score: 0", font_size=16))   # placeholder
+        self.high_label = Label(text=f"High Score: {scores.get(game_type)}", font_size=16)
+        info_bar.add_widget(self.high_label)
         self.add_widget(info_bar)
 
         top_bar = BoxLayout(size_hint=(1, 0.08), padding=(10, 0), spacing=6)
@@ -340,6 +385,7 @@ class RootLayout(BoxLayout):
 
     def stop(self):
         """Call when leaving the game screen."""
+        self.scores.submit(self.game_type, self.board.score)
         if self._tick:
             self._tick.cancel()
             self._tick = None
@@ -351,10 +397,16 @@ class RootLayout(BoxLayout):
             self.board.on_key_down(name)
 
     def _refresh_label(self, *args):
-        if self.board.game_over:
-            self.score_label.text = f"Game Over! Score: {self.board.score}"
+        b = self.board
+        if b.game_over:
+            if self.scores.submit(self.game_type, b.score):
+                self.score_label.text = f"Game Over! New High Score: {b.score}"
+            else:
+                self.score_label.text = f"Game Over! Score: {b.score}"
         else:
-            self.score_label.text = f"Score: {self.board.score}"
+            self.score_label.text = f"Score: {b.score}"
+        # shown live: the saved best, or the current score if it is higher
+        self.high_label.text = f"High Score: {max(self.scores.get(self.game_type), b.score)}"
 
 
 # --------------------------------------------------------------- home screen
@@ -399,12 +451,10 @@ class DropButton(MenuButton):
 
 
 class MenuLayout(BoxLayout):
-    def __init__(self, on_start, selected=None, **kwargs):
+    def __init__(self, on_start, on_scores, selected=None, **kwargs):
         super().__init__(orientation='vertical', padding=dp(24), spacing=dp(10), **kwargs)
         self.selected = selected          # None until the player picks a type
 
-        # The logo takes whatever space is left and shrinks on short screens,
-        # so nothing gets cut off.
         if os.path.exists(LOGO):
             self.add_widget(Image(source=LOGO))
         else:
@@ -413,7 +463,6 @@ class MenuLayout(BoxLayout):
             text="SNAKE", font_size=44, bold=True, color=(0.45, 0.95, 0.55, 1),
             size_hint=(1, None), height=dp(56)))
 
-        # Game Type: a button (placeholder "Game Type") that opens the list
         self.dropdown = DropDown()
         for name in GAME_TYPES:
             option = MenuButton(text=name, height=dp(48),
@@ -431,26 +480,74 @@ class MenuLayout(BoxLayout):
             text="Start New Game", font_size=24, height=dp(60),
             background_color=(0.30, 0.85, 0.40, 1), color=(0.05, 0.05, 0.05, 1),
             on_release=lambda *_: on_start(self.selected)))
-        self.add_widget(MenuButton(text="High Score", disabled=True))   # placeholder
+        self.add_widget(MenuButton(
+            text="High Score", on_release=lambda *_: on_scores()))
 
     def _refresh_type_btn(self):
         if self.selected:
             self.type_btn.text = self.selected
             self.type_btn.color = (1, 1, 1, 1)
         else:
-            self.type_btn.text = "Game Type"                  # placeholder
-            self.type_btn.color = (0.70, 0.72, 0.78, 1)       # dimmer until chosen
+            self.type_btn.text = "Game Type"
+            self.type_btn.color = (0.70, 0.72, 0.78, 1)
 
     def _on_pick(self, dropdown, name):
         self.selected = name
         self._refresh_type_btn()
+
+class Separator(Widget):
+    """A thin horizontal line."""
+
+    def __init__(self, **kwargs):
+        super().__init__(size_hint=(1, None), height=dp(1), **kwargs)
+        with self.canvas:
+            Color(0.20, 0.45, 0.95, 0.6)
+            self._line = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._sync, size=self._sync)
+
+    def _sync(self, *args):
+        self._line.pos = self.pos
+        self._line.size = self.size
+
+
+class HighScoreLayout(BoxLayout):
+    """High scores page: one row per game type, with a line between the rows."""
+
+    def __init__(self, scores, on_back, **kwargs):
+        super().__init__(orientation='vertical', padding=dp(24), spacing=dp(10), **kwargs)
+        self.add_widget(Label(
+            text="HIGH SCORES", font_size=36, bold=True, color=(1.0, 0.85, 0.20, 1),
+            size_hint=(1, None), height=dp(70)))
+        self.add_widget(Separator())
+
+        names = list(GAME_TYPES)
+        for i, name in enumerate(names):
+            row = BoxLayout(size_hint=(1, None), height=dp(56), padding=(dp(12), 0))
+            row.add_widget(self._cell(name, 'left', 0.6, (0.95, 0.95, 0.95, 1)))
+            row.add_widget(self._cell(str(scores.get(name)), 'right', 0.4,
+                                      (1.0, 0.85, 0.20, 1)))
+            self.add_widget(row)
+            if i < len(names) - 1:
+                self.add_widget(Separator())      # line between game types
+
+        self.add_widget(Widget())                 # pushes Back to the bottom
+        self.add_widget(MenuButton(text="Back", on_release=lambda *_: on_back()))
+
+    @staticmethod
+    def _cell(text, halign, hint_x, color):
+        label = Label(text=text, font_size=24, halign=halign, valign='middle',
+                      color=color, size_hint=(hint_x, 1))
+        label.bind(size=lambda lbl, size: setattr(lbl, 'text_size', size))
+        return label
 
 
 # ----------------------------------------------------------------------- app
 class SnakeApp(App):
     def build(self):
         self.title = "Snake"
-        self.selected_type = None             # nothing picked yet
+        self.scores = HighScores(os.path.join(self.user_data_dir, "highscores.json"))
+        self.selected_type = None
+        self.in_scores = False
         self.game = None
         self.container = BoxLayout()
         self.show_menu()
@@ -459,17 +556,34 @@ class SnakeApp(App):
 
     def show_menu(self):
         self._stop_game()
+        self.in_scores = False
         self.container.clear_widgets()
         self.container.add_widget(
-            MenuLayout(on_start=self.start_game, selected=self.selected_type))
+            MenuLayout(on_start=self.start_game, on_scores=self.show_high_scores,
+                       selected=self.selected_type))
+
+    def show_high_scores(self):
+        self.in_scores = True
+        self.container.clear_widgets()
+        self.container.add_widget(
+            HighScoreLayout(scores=self.scores, on_back=self.show_menu))
 
     def start_game(self, choice):
-        self.selected_type = choice             # remembered when you come back
-        game_type = choice or "Classic"         # Classic if the player never picked one
+        self.selected_type = choice
+        game_type = choice or "Classic"
+        self.in_scores = False
         self._stop_game()
         self.container.clear_widgets()
-        self.game = RootLayout(game_type=game_type, on_menu=self.show_menu)
+        self.game = RootLayout(game_type=game_type, on_menu=self.show_menu,scores=self.scores)
         self.container.add_widget(self.game)
+
+    def on_pause(self):
+        if self.game:
+            self.scores.submit(self.game.game_type, self.game.board.score)
+        return True
+
+    def on_stop(self):
+        self._stop_game()
 
     def _stop_game(self):
         if self.game:
@@ -478,7 +592,7 @@ class SnakeApp(App):
 
     def _on_back(self, window, key, *args):
         # Android back button / Esc: leave the game for the menu
-        if key == 27 and self.game:
+        if key == 27 and (self.game or self.in_scores):
             self.show_menu()
             return True
         return False
