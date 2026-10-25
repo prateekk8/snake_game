@@ -36,7 +36,9 @@ CELL_PX = 20                              # size of one grid cell in pixels
 MOVE_INTERVAL = 0.15                      # seconds per snake step (lower = faster)
 GRID_COLOR = (0.20, 0.45, 0.95, 0.35)     # blue grid lines
 WALL_COLOR = (0.72, 0.72, 0.95, 1)        # light lavender walls
-
+DECOR_DENSITY = 0.03                      # clusters per cell; 0 turns the pattern off
+DECOR_BLUE = [(0.13, 0.28, 0.80), (0.16, 0.33, 0.88), (0.10, 0.22, 0.70)]
+DECOR_PURPLE = [(0.40, 0.22, 0.78), (0.46, 0.27, 0.85)]
 BONUS_POINTS = 10
 BONUS_MIN_WAIT = 30                       # fewest steps before a bonus appears
 BONUS_MAX_WAIT = 80                       # most steps before a bonus appears
@@ -49,6 +51,7 @@ GAME_TYPES = {
     "Classic": None,
     "Tunnel": "tunnel",
     "Box": "box",
+    "Apartment": "apartment",
 }
 
 UP, DOWN, LEFT, RIGHT = (0, 1), (0, -1), (-1, 0), (1, 0)
@@ -95,7 +98,6 @@ class HighScores:
         except OSError:
             pass
 
-
 # ------------------------------------------------------------------- walls
 def make_walls(kind, cols, rows):
     """Return the set of (col, row) cells that are walls for a game type.
@@ -123,8 +125,50 @@ def make_walls(kind, cols, rows):
                 walls.add((cx + sx * i, cy))
             for i in range(arm_y):
                 walls.add((cx, cy + sy * i))
+    elif kind == "apartment":
+        # Two L-shaped walls make "rooms": one hangs from the top edge and runs
+        # to the right edge, the other rises from the bottom edge and runs to
+        # the left edge. The corridor between them is where the snake starts.
+        t = max(1, round(rows / 17))                  # wall thickness
+        q = max(2, round(rows * 0.25))                # distance of each arm from its edge
+        a_c = max(1, round(cols * 0.31))              # column of the top wall's upright
+        b_c = min(max(a_c + t + 1, round(cols * 0.54)), cols - t - 1)  # bottom wall's upright
+        top_arm = rows - 1 - q                   # highest row of the top wall's arm
+        for k in range(t):
+            for x in range(a_c, cols):                # top arm, to the right edge
+                walls.add((x, top_arm - k))
+            for x in range(0, b_c + t):               # bottom arm, from the left edge
+                walls.add((x, q + k))
+        for y in range(top_arm - t + 1, rows):       # top upright, down from the top edge
+            for k in range(t):
+                walls.add((a_c + k, y))
+        for y in range(0, q + t):                     # bottom upright, up from the bottom edge
+            for k in range(t):
+                walls.add((b_c + k, y))
     return walls
 
+# ------------------------------------------------------------ decoration
+def make_decor(cols, rows):
+    """Random clusters of filled cells, like the Nokia board.
+    Returns {colour: [(col, row), ...]}. Purely cosmetic: it never affects the game."""
+    if DECOR_DENSITY <= 0:
+        return {}
+    cells = {}
+    for _ in range(max(3, round(cols * rows * DECOR_DENSITY))):
+        w, h = random.randint(2, 4), random.randint(2, 3)
+        x0 = random.randint(0, max(0, cols - w))
+        y0 = random.randint(0, max(0, rows - h))
+        main, other = ((DECOR_PURPLE, DECOR_BLUE) if random.random() < 0.25
+                       else (DECOR_BLUE, DECOR_PURPLE))
+        for x in range(x0, min(cols, x0 + w)):
+            for y in range(y0, min(rows, y0 + h)):
+                if random.random() < 0.8:                  # leave some holes
+                    palette = other if random.random() < 0.15 else main
+                    cells[(x, y)] = random.choice(palette)
+    groups = {}
+    for cell, colour in cells.items():
+        groups.setdefault(colour, []).append(cell)
+    return groups
 
 # -------------------------------------------------------------- game board
 class GameBoard(Widget):
@@ -138,6 +182,7 @@ class GameBoard(Widget):
         self.cols = 0
         self.rows = 0
         self.walls = set()
+        self.decor = {}
         self.snake = []
         self.direction = RIGHT
         self.next_direction = RIGHT
@@ -161,7 +206,8 @@ class GameBoard(Widget):
         mid_x, mid_y = max(self.cols // 2, 3), self.rows // 2
         self.snake = [(mid_x - 1, mid_y), (mid_x - 2, mid_y), (mid_x - 3, mid_y)]
         self.walls = make_walls(self.wall_kind, self.cols, self.rows)
-        self.walls.difference_update(self.snake)      # never start inside a wall
+        self.walls.difference_update(self.snake)
+        self.decor = make_decor(self.cols, self.rows)  # a new random pattern
         self.direction = RIGHT
         self.next_direction = RIGHT
         self.score = 0
@@ -255,6 +301,9 @@ class GameBoard(Widget):
                 Rectangle(pos=(self.x + col * cs, self.y), size=(1, self.height))
             for row in range(self.rows + 1):
                 Rectangle(pos=(self.x, self.y + row * cs), size=(self.width, 1))
+
+
+
 
             # walls (Tunnel / Box)
             Color(*WALL_COLOR)
